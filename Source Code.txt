@@ -1,0 +1,154 @@
+import cv2
+import numpy as np
+import time
+from flask import Flask, Response
+import threading
+
+# Initialize Flask app
+app = Flask(__name__)
+
+print("Importing dependencies...")
+
+# Load YOLOv3-Tiny model
+weights_path = "/home/xilinx/jupyter_notebooks/OBJECT/yolov3-tiny.weights"
+cfg_path = "/home/xilinx/jupyter_notebooks/OBJECT/yolov3-tiny.cfg"
+names_path = "/home/xilinx/jupyter_notebooks/OBJECT/coco.names"
+
+try:
+    net = cv2.dnn.readNet(weights_path, cfg_path)
+    with open(names_path, "r") as f:
+        classes = [line.strip() for line in f.readlines()]
+    print("YOLO-Tiny model loaded successfully.")
+except Exception as e:
+    print(f"Error loading YOLO: {e}")
+    exit()
+
+# Get output layer names
+layer_names = net.getLayerNames()
+output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+colors = np.random.uniform(0, 255, size=(len(classes), 3))
+
+# Open camera
+print("Opening camera...")
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    print("Error: Could not open camera!")
+    exit()
+
+print("Camera opened successfully. Starting live detection...")
+
+# Frame skipping for speed
+frame_skip = 2  # Process every 2nd frame
+frame_count = 0
+
+def generate_frames():
+    global frame_count
+    while True:
+        try:
+            ret, img = cap.read()
+            if not ret:
+                print("Error: Failed to capture frame")
+                time.sleep(0.1)
+                continue
+
+            frame_count += 1
+            if frame_count % frame_skip != 0:
+                continue  # Skip frames to increase FPS
+
+            img = cv2.resize(img, (320, 240))  # Faster than imutils        
+            height, width, channels = img.shape
+
+            # YOLO object detection
+            blob = cv2.dnn.blobFromImage(img, 0.00392, (320, 320), (0, 0, 0), True, crop=False)
+            net.setInput(blob)
+            outs = net.forward(output_layers)
+
+            class_ids = []
+            confidences = []
+            boxes = []
+
+            for out in outs:
+                for detection in out:
+                    scores = detection[5:]
+                    class_id = np.argmax(scores)
+                    confidence = scores[class_id]
+                    if confidence > 0.5:
+                        center_x = int(detection[0] * width)
+                        center_y = int(detection[1] * height)
+                        w = int(detection[2] * width)
+                        h = int(detection[3] * height)
+
+                        x = int(center_x - w / 2)
+                        y = int(center_y - h / 2)
+
+                        boxes.append([x, y, w, h])
+                        confidences.append(float(confidence))
+                        class_ids.append(class_id)
+
+            indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.6, 0.5)
+            
+            for i in range(len(boxes)):
+                if i in indexes:
+                    x, y, w, h = boxes[i]
+                    label = str(classes[class_ids[i]])
+                    color = colors[class_ids[i]]
+                    cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+                    cv2.putText(img, label, (x, y + 30), cv2.FONT_HERSHEY_PLAIN, 2, color, 2)
+
+            # Encode frame for streaming
+            ret, buffer = cv2.imencode('.jpg', img)
+            if not ret:
+                continue
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+        except Exception as e:
+            print(f"Frame processing error: {e}")
+            break
+
+@app.route('/')
+def index():
+    return """
+    <html>
+        <head>
+            <title>FPGA Object Detection</title>
+            <style>
+                body { background: black; text-align: center; }
+                h1 { color: white; }
+            </style>
+        </head>
+        <body>
+            <h1>FPGA Object Detection Stream</h1>
+            <img src="/video_feed" width="640" style="border: 2px solid white;">
+        </body>
+    </html>
+    """
+
+@app.route('/favicon.ico')
+def favicon():
+    return "", 204
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), 
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# Start Flask in a separate thread
+flask_thread = threading.Thread(
+    target=app.run, 
+    kwargs={'host': '192.168.137.78', 'port': 5000, 'threaded': True}
+)
+flask_thread.daemon = True
+flask_thread.start()
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("\nStopping detection...")
+finally:
+    cap.release()
+    print("Camera closed and resources released.")
+    print("Server shutdown initiated...")

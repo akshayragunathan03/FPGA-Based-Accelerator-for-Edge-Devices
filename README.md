@@ -13,24 +13,7 @@
 - Programming: Python, PYNQ OS
 - Libraries: OpenCV, Flask, NumPy
 
-## Installation
-1. Clone the Repository- 
-   git clone https://github.com/akshayragunathan03/FPGA-Based-Accelerator-for-Edge-Devices.git
-   cd FPGA-Based-Accelerator-for-Edge-Devices
 
-2. Set up the FPGA environment:
-
-    Install PYNQ OS on the board.
-    Load the required overlays.
    
-3.Install dependencies:
 
-    bash
-    Copy
-    Edit
-    pip install -r requirements.txt
-    
-4.Prepare the Model
-
-  Place the Tiny-YOLO weights and configuration files in the designated folder.
 
